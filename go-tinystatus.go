@@ -3,27 +3,52 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/integrii/flaggy"
 	"github.com/rs/zerolog"
 )
 
-// defines go-tinystatus logger
-var log = zerolog.New(os.Stdout).
-	With().Timestamp().
+var log = zerolog.New(os.Stderr).
+	With().Timestamp().Caller().
 	Logger()
 
 func main() {
-	checkFile, _ := os.Open("checks.csv")
-	defer checkFile.Close()
+	// cli: go-tinystatus [--daemon <host>:<port>] [--check <row>] <check.csv> <incidents.txt>
+	var checkPath string = "checks.csv"
+	var incidentsPath string = "incidents.txt"
 
-	records, err := extractRecordsFromCSV(checkFile)
+	flaggy.AddPositionalValue(&checkPath, checkPath, 1, false, "File containing all checks, formatted in CSV")
+	flaggy.AddPositionalValue(&incidentsPath, incidentsPath, 2, false, "File containing all incidents to be displayed")
+	flaggy.Parse()
+
+	var records []RecordStatus
+	checkFile, err := os.Open(checkPath)
 	if err != nil {
-		panic(err)
+		log.Fatal().Err(err).Send()
+	}
+	records, err = extractRecordsFromCSV(checkFile)
+	_ = checkFile.Close()
+	if err != nil {
+		log.Fatal().Err(err).Msgf("failed to extract CSV rows from '%s'", checkPath)
+	}
+
+	var incidents []string
+	if _, err := os.Stat(incidentsPath); !errors.Is(err, os.ErrNotExist) {
+		incidentsFile, err := os.Open(incidentsPath)
+		if err != nil {
+			log.Fatal().Err(err).Send()
+		}
+		incidents, err = extractIncidentsFromTxt(incidentsFile)
+		_ = incidentsFile.Close()
+		if err != nil {
+			log.Fatal().Err(err).Msgf("failed to extract incidents from '%s'", checkPath)
+		}
 	}
 
 	status := StatusList{}
@@ -31,12 +56,67 @@ func main() {
 		status = append(status, Probes[record.CType](record))
 	}
 
+	data := map[string]interface{}{
+		"Status":    status,
+		"Incidents": incidents,
+		"LastCheck": time.Now(),
+	}
+
 	buff := bytes.NewBufferString("")
-	err = templatedHtml.ExecuteTemplate(buff, "tinystatus", status)
+	err = templatedHtml.ExecuteTemplate(buff, "tinystatus", data)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println(buff.String())
+}
+
+// extractRecordsFromCSV read the CSV file and extract all record.
+func extractRecordsFromCSV(file *os.File) ([]RecordStatus, error) {
+	var records []RecordStatus
+
+	scanner, line := bufio.NewScanner(file), 0
+	for scanner.Scan() {
+		line++
+		record := strings.Split(scanner.Text(), ",")
+
+		if len(record) < 4 {
+			log.Error().Msgf("invalid CSV row %d: wrong number of fields", line)
+			continue
+		}
+
+		ctype := strings.TrimSpace(record[0])
+		if _, exists := Probes[ctype]; !exists {
+			log.Warn().Msgf("unknown probe '%s'", ctype)
+			continue
+		}
+
+		rs := RecordStatus{
+			CType:       ctype,
+			Category:    "Services",
+			Expectation: strings.TrimSpace(record[1]),
+			Name:        strings.TrimSpace(record[2]),
+			Target:      strings.TrimSpace(record[3]),
+		}
+		if len(record) >= 5 {
+			rs.Category = strings.TrimSpace(record[4])
+		}
+
+		records = append(records, rs)
+	}
+
+	return records, scanner.Err()
+}
+
+// extractIncidentsFromTxt return all line in an array off string
+func extractIncidentsFromTxt(file *os.File) ([]string, error) {
+	var lines []string
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, strings.TrimSpace(scanner.Text()))
+	}
+
+	return lines, scanner.Err()
 }
 
 type (
@@ -80,9 +160,6 @@ func (l StatusList) NumberOutages() int {
 	return nb
 }
 
-// LastCheck returns the current date (helpers for go template).
-func (l StatusList) LastCheck() time.Time { return time.Now() }
-
 // Succeed returns true if the scan didn't find any error.
 func (s Status) Succeed() bool { return s.ProbeResult == nil }
 
@@ -95,40 +172,3 @@ type (
 	// ProbeResult is the result of a probe scan on a record
 	ProbeResult error
 )
-
-// extractRecordsFromCSV read the CSV file and extract all record.
-func extractRecordsFromCSV(file *os.File) ([]RecordStatus, error) {
-	var records []RecordStatus
-
-	scanner, line := bufio.NewScanner(file), 0
-	for scanner.Scan() {
-		line++
-		record := strings.Split(scanner.Text(), ",")
-
-		if len(record) < 4 {
-			log.Error().Msgf("invalid CSV row %d: wrong number of fields", line)
-			continue
-		}
-
-		ctype := strings.TrimSpace(record[0])
-		if _, exists := Probes[ctype]; !exists {
-			log.Warn().Msgf("unknown probe '%s'", ctype)
-			continue
-		}
-
-		rs := RecordStatus{
-			CType:       ctype,
-			Category:    "Services",
-			Expectation: strings.TrimSpace(record[1]),
-			Name:        strings.TrimSpace(record[2]),
-			Target:      strings.TrimSpace(record[3]),
-		}
-		if len(record) >= 5 {
-			rs.Category = strings.TrimSpace(record[4])
-		}
-
-		records = append(records, rs)
-	}
-
-	return records, scanner.Err()
-}

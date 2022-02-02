@@ -28,13 +28,13 @@ var templatedHtml = template.Must(template.New("tinystatus").Parse(`
     <div class='container'>
       <h1>Global Status</h1>
       <ul>
-		{{- if gt .NumberOutages 0}}
-        <ul><li class='panel failed-bg'>{{.NumberOutages}} Outage(s)</li></ul>
+		{{- if gt .Status.NumberOutages 0}}
+        <ul><li class='panel failed-bg'>{{.Status.NumberOutages}} Outage(s)</li></ul>
 		{{- else}}
         <li class='panel success-bg'>All Systems Operational</li>
 		{{- end}}
       </ul>
-	  {{- range $category, $status := .Categories}}
+	  {{- range $category, $status := .Status.Categories}}
       <h1>{{$category}}</h1>
       <ul>
 		{{- range $status}}
@@ -47,9 +47,12 @@ var templatedHtml = template.Must(template.New("tinystatus").Parse(`
       </ul>
 	  {{- end}}
       <p class=small> Last check: {{.LastCheck.Format "2006-01-02T15:04:05-0700"}}</p>
+	  {{- with .Incidents}}
       <h1>Incidents</h1>
-      <p>2021/02/01 08:00 - Site unavailable. Resolved after 5 minutes of downtime.</p>
-      <p>2021/01/01 09:00 - User may have problem with API. Incident resolved after 1 hour.</p>
+	    {{- range .}}
+      <p>{{.}}</p>
+        {{- end}}
+	  {{- end}}
     </div>
   </body>
 </html>
