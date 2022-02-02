@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/integrii/flaggy"
@@ -51,36 +52,59 @@ func main() {
 		}
 	}
 
-	status := StatusList{}
-	for _, record := range records {
-		status = append(status, Probes[record.CType](record))
-	}
+	html, _ := renderStatusPage(records, incidents)
+	fmt.Println(html)
+}
 
+// renderStatusPage runs all checks and generates the status page.
+func renderStatusPage(records []RecordStatus, incidents []string) (string, error) {
+	start, limit := time.Now(), make(chan struct{}, 32) // NOTE: limit to 32 requests in parallel
+
+	status := StatusList{}
+	wg, mx := sync.WaitGroup{}, sync.Mutex{}
+	for _, record := range records {
+		wg.Add(1)
+		limit <- struct{}{}
+
+		go func(record RecordStatus) {
+			defer wg.Done()
+			defer func() { <-limit }()
+			result := Probes[record.CType](record)
+
+			mx.Lock()
+			status = append(status, result)
+			mx.Unlock()
+		}(record)
+	}
+	wg.Wait()
+
+	buff := bytes.NewBufferString("")
 	data := map[string]interface{}{
 		"Status":    status,
 		"Incidents": incidents,
 		"LastCheck": time.Now(),
+		"Elapsed":   time.Since(start),
 	}
 
-	buff := bytes.NewBufferString("")
-	err = templatedHtml.ExecuteTemplate(buff, "tinystatus", data)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(buff.String())
+	err := templatedHtml.ExecuteTemplate(buff, "tinystatus", data)
+	return buff.String(), err
 }
 
 // extractRecordsFromCSV read the CSV file and extract all record.
 func extractRecordsFromCSV(file *os.File) ([]RecordStatus, error) {
 	var records []RecordStatus
 
-	scanner, line := bufio.NewScanner(file), 0
+	scanner := bufio.NewScanner(file)
+	line, nline := "", 0
 	for scanner.Scan() {
-		line++
-		record := strings.Split(scanner.Text(), ",")
+		line, nline = strings.TrimSpace(scanner.Text()), nline+1
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
 
+		record := strings.Split(line, ",")
 		if len(record) < 4 {
-			log.Error().Msgf("invalid CSV row %d: wrong number of fields", line)
+			log.Error().Msgf("invalid CSV row %d: wrong number of fields", nline)
 			continue
 		}
 
@@ -136,7 +160,7 @@ func (l StatusList) Less(i, j int) bool {
 	if cmp := strings.Compare(l[i].Category, l[j].Category); cmp != 0 {
 		return cmp < 0
 	}
-	return l[i].Succeed() == true != l[j].Succeed()
+	return strings.Compare(l[i].Name, l[j].Name) < 0
 }
 
 // Categories returns all status organized by category

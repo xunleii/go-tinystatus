@@ -40,13 +40,16 @@ var templatedHtml = template.Must(template.New("tinystatus").Parse(`
 		{{- range $status}}
 		  {{- if not .Succeed}}
         <li>{{.Name}} <span class='small failed'>({{.ProbeResult.Error}})</span><span class='status failed'>Disrupted</span></li>
-		  {{- else}}
+		  {{- end}}
+		{{- end}}
+		{{- range $status}}
+		  {{- if .Succeed}}
         <li>{{.Name}} <span class='status success'>Operational</span></li>
 		  {{- end}}
 		{{- end}}
       </ul>
 	  {{- end}}
-      <p class=small> Last check: {{.LastCheck.Format "2006-01-02T15:04:05-0700"}}</p>
+      <p class=small> Last check: {{.LastCheck.Format "2006-01-02T15:04:05-0700"}} (in {{.Elapsed}})</p>
 	  {{- with .Incidents}}
       <h1>Incidents</h1>
 	    {{- range .}}
