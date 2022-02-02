@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -16,16 +17,27 @@ import (
 )
 
 var log = zerolog.New(os.Stderr).
-	With().Timestamp().Caller().
+	With().Timestamp().
 	Logger()
 
 func main() {
-	// cli: go-tinystatus [--daemon <host>:<port>] [--check <row>] <check.csv> <incidents.txt>
-	var checkPath string = "checks.csv"
-	var incidentsPath string = "incidents.txt"
+	// cli: go-tinystatus [--daemon] [--addr <host>:<port>] [--interval <interval>] [--check <row>] <check.csv> <incidents.txt>
+	var (
+		checkPath     = "checks.csv"
+		incidentsPath = "incidents.txt"
+
+		daemonize = false
+		addr      = ":8080"
+		interval  = 10 * time.Second
+	)
 
 	flaggy.AddPositionalValue(&checkPath, checkPath, 1, false, "File containing all checks, formatted in CSV")
 	flaggy.AddPositionalValue(&incidentsPath, incidentsPath, 2, false, "File containing all incidents to be displayed")
+
+	flaggy.Bool(&daemonize, "", "daemon", "Start go-tinystatus as daemon with an embedded web server.")
+	flaggy.String(&addr, "", "addr", "Address on which the daemon will be listening.")
+	flaggy.Duration(&interval, "", "interval", "Interval between two page rendering.")
+
 	flaggy.Parse()
 
 	var records []RecordStatus
@@ -52,8 +64,40 @@ func main() {
 		}
 	}
 
-	html, _ := renderStatusPage(records, incidents)
-	fmt.Println(html)
+	if !daemonize {
+		html, err := renderStatusPage(records, incidents)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to render the status page")
+		}
+		fmt.Println(html)
+		return
+	}
+
+	var statuspage string
+	rwx := sync.RWMutex{}
+
+	ticker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				html, err := renderStatusPage(records, incidents)
+				if err != nil {
+					log.Fatal().Err(err).Msg("failed to render the status page")
+				}
+
+				rwx.Lock()
+				statuspage = html
+				rwx.Unlock()
+			}
+		}
+	}()
+
+	http.ListenAndServe(addr, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		rwx.RLock()
+		defer rwx.RUnlock()
+		writer.Write([]byte(statuspage))
+	}))
 }
 
 // renderStatusPage runs all checks and generates the status page.
