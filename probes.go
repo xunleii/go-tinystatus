@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-ping/ping"
 )
 
 // Probe is used to scan a specific target and return its current status.
@@ -22,10 +24,13 @@ var (
 		"http6": httpProbe,
 		"http4": httpProbe,
 		"http":  httpProbe,
+		"ping6": pingProbe,
+		"ping4": pingProbe,
+		"ping":  pingProbe,
 	}
 )
 
-// httpProbe implements the scan probe for all HTTP records.
+// httpProbe implements the scan probe for all `HTTP` records.
 func httpProbe(record *RecordStatus) Status {
 	if !strings.HasPrefix(record.Target, "http") {
 		// NOTE: force to use a protocol scheme
@@ -75,6 +80,54 @@ func httpProbe(record *RecordStatus) Status {
 	}
 
 	return Status{RecordStatus: record}
+}
+
+// pingProbe implements the scan for all `PING` records.
+func pingProbe(record *RecordStatus) Status {
+	if record.CType == "ping6" {
+		return Status{
+			RecordStatus: record,
+			ProbeResult:  fmt.Errorf("`ping6` is not supported by go-tinystatus"),
+		}
+	}
+
+	expectedReturn, err := strconv.Atoi(record.Expectation)
+	if err != nil {
+		return Status{
+			RecordStatus: record,
+			ProbeResult:  fmt.Errorf("Invalid expected return code '%s': should a number", record.Expectation),
+		}
+	}
+	pingable := expectedReturn == 0
+
+	pinger, err := ping.NewPinger(record.Target)
+	if err != nil {
+		return Status{
+			RecordStatus: record,
+			ProbeResult:  err,
+		}
+	}
+	pinger.Timeout = 10 * time.Second
+	pinger.Count = 1
+
+	status := Status{RecordStatus: record}
+	err = pinger.Run()
+	if err != nil {
+		if pingable {
+			status.ProbeResult = err
+		}
+		return status
+	}
+
+	pcktReceived := pinger.Statistics().PacketsRecv
+
+	switch {
+	case pingable && pcktReceived == 0:
+		status.ProbeResult = fmt.Errorf("no packet received")
+	case !pingable && pcktReceived > 0:
+		status.ProbeResult = fmt.Errorf("`%s` should failed but succeed", record.CType)
+	}
+	return status
 }
 
 // errUnwrapAll returns the deepest error (origin) from wrapped errors.
