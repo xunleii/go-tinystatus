@@ -40,7 +40,7 @@ To install go-tinystatus:
 * Edit the checks file `checks.csv`
 * To add incidents or maintenance, edit `incidents.txt`
 * Generate status page `./go-tinystatus > index.html` and serve the page with your favorite web server
-* Or run the embedded web server with `./go-tinystatus --deaemon`
+* Or run the embedded web server with `./go-tinystatus --daemon`
 
 ## Configuration file
 
@@ -56,5 +56,5 @@ Command can be:
 * `ping` - Check ping status
 * `port` or `tcp` - Check open port status
 
-There are also `http4`, `http6`, `ping4`, `ping6`, `port4`, `port6` for IPv4 or IPv6 only check.  
+There are also `http4`, `http6`, `ping4`, `ping6`, `port4`, `port6` for IPv4 or IPv6 only check.
 **Note:** `ping6` is not available on `go-tinystatus`, but you can use `ping` with an IPv6 target.
