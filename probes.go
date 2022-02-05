@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,17 +18,28 @@ import (
 // Probe is used to scan a specific target and return its current status.
 type Probe func(record *RecordStatus) Status
 
-// Probes reprensents all probes defined into go-tinystatus
+// Probes represents all probes defined into go-tinystatus
+var Probes = map[string]Probe{
+	// tinystatus probes
+	"http6": httpProbe,
+	"http4": httpProbe,
+	"http":  httpProbe,
+	"ping6": pingProbe,
+	"ping4": pingProbe,
+	"ping":  pingProbe,
+	"port6": portProbe,
+	"port4": portProbe,
+	"port":  portProbe,
+
+	// go-tinystatus probes
+	"tcp6": portProbe,
+	"tcp4": portProbe,
+	"tcp":  portProbe,
+}
+
 var (
-	Probes = map[string]Probe{
-		// tinystatus probe
-		"http6": httpProbe,
-		"http4": httpProbe,
-		"http":  httpProbe,
-		"ping6": pingProbe,
-		"ping4": pingProbe,
-		"ping":  pingProbe,
-	}
+	timeout      = 10 * time.Second
+	rxPortTarget = regexp.MustCompile(`(?P<host>[^\s]+)\s+(?P<port>\d+)`)
 )
 
 // httpProbe implements the scan probe for all `HTTP` records.
@@ -41,7 +53,7 @@ func httpProbe(record *RecordStatus) Status {
 	if err != nil {
 		return Status{
 			RecordStatus: record,
-			ProbeResult:  fmt.Errorf("Invalid expected status code '%s': should a number", record.Expectation),
+			ProbeResult:  fmt.Errorf("invalid expected status code '%s': should a number", record.Expectation),
 		}
 	}
 
@@ -55,13 +67,13 @@ func httpProbe(record *RecordStatus) Status {
 				}
 
 				return (&net.Dialer{
-					Timeout:   30 * time.Second,
-					KeepAlive: 30 * time.Second,
+					Timeout:   timeout,
+					KeepAlive: timeout,
 				}).DialContext(ctx, network, addr)
 			},
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
-		Timeout: 10 * time.Second, // NOTE: avoid infinite timeout
+		Timeout: timeout, // NOTE: avoid infinite timeout
 	}
 
 	resp, err := client.Get(record.Target)
@@ -75,7 +87,7 @@ func httpProbe(record *RecordStatus) Status {
 	if resp.StatusCode != expectedCode {
 		return Status{
 			RecordStatus: record,
-			ProbeResult:  fmt.Errorf("Status code: %d", resp.StatusCode),
+			ProbeResult:  fmt.Errorf("status code: %d", resp.StatusCode),
 		}
 	}
 
@@ -95,10 +107,10 @@ func pingProbe(record *RecordStatus) Status {
 	if err != nil {
 		return Status{
 			RecordStatus: record,
-			ProbeResult:  fmt.Errorf("Invalid expected return code '%s': should a number", record.Expectation),
+			ProbeResult:  fmt.Errorf("invalid expected return code '%s': should a number", record.Expectation),
 		}
 	}
-	pingable := expectedReturn == 0
+	shouldBePingable := expectedReturn == 0
 
 	pinger, err := ping.NewPinger(record.Target)
 	if err != nil {
@@ -107,25 +119,65 @@ func pingProbe(record *RecordStatus) Status {
 			ProbeResult:  err,
 		}
 	}
-	pinger.Timeout = 10 * time.Second
+	pinger.Timeout = timeout
 	pinger.Count = 1
 
-	status := Status{RecordStatus: record}
 	err = pinger.Run()
-	if err != nil {
-		if pingable {
-			status.ProbeResult = err
+	if shouldBePingable && err != nil {
+		return Status{
+			RecordStatus: record,
+			ProbeResult:  err,
 		}
-		return status
 	}
 
 	pcktReceived := pinger.Statistics().PacketsRecv
 
+	status := Status{RecordStatus: record}
 	switch {
-	case pingable && pcktReceived == 0:
+	case shouldBePingable && pcktReceived == 0:
 		status.ProbeResult = fmt.Errorf("no packet received")
-	case !pingable && pcktReceived > 0:
+	case !shouldBePingable && pcktReceived > 0:
 		status.ProbeResult = fmt.Errorf("`%s` should failed but succeed", record.CType)
+	}
+	return status
+}
+
+// portProbe implements the scan for all `PORT` or `TCP` records.
+func portProbe(record *RecordStatus) Status {
+	expectedReturn, err := strconv.Atoi(record.Expectation)
+	if err != nil {
+		return Status{
+			RecordStatus: record,
+			ProbeResult:  fmt.Errorf("invalid expected return code '%s': should a number", record.Expectation),
+		}
+	}
+	shouldBeOpen := expectedReturn == 0
+
+	addr := rxPortTarget.ReplaceAllString(record.Target, "$host:$port")
+	if addr == record.Target {
+		return Status{
+			RecordStatus: record,
+			ProbeResult:  fmt.Errorf("invalid target '%s': should be formated like '<host> <port>'", record.Target),
+		}
+	}
+
+	network := strings.ReplaceAll(record.CType, "port", "tcp") // NOTE: convert portX in tcpX
+	conn, err := net.DialTimeout(network, addr, timeout)
+	if err != nil && (shouldBeOpen || !err.(net.Error).Timeout()) {
+		return Status{
+			RecordStatus: record,
+			ProbeResult:  err,
+		}
+	}
+
+	status := Status{RecordStatus: record}
+	switch {
+	case shouldBeOpen && conn == nil:
+		host, port, _ := net.SplitHostPort(addr)
+		status.ProbeResult = fmt.Errorf("connect to %s port %s (%s) failed: Connection refused", host, port, network)
+	case !shouldBeOpen && conn != nil:
+		host, port, _ := net.SplitHostPort(addr)
+		status.ProbeResult = fmt.Errorf("connect to %s port %s (%s) succeed", host, port, network)
 	}
 	return status
 }
