@@ -126,7 +126,7 @@ func pingProbe(record *RecordStatus) Status {
 	if shouldBePingable && err != nil {
 		return Status{
 			RecordStatus: record,
-			ProbeResult:  err,
+			ProbeResult:  errUnwrapAll(err),
 		}
 	}
 
@@ -166,7 +166,7 @@ func portProbe(record *RecordStatus) Status {
 	if err != nil && (shouldBeOpen || !err.(net.Error).Timeout()) {
 		return Status{
 			RecordStatus: record,
-			ProbeResult:  err,
+			ProbeResult:  errUnwrapAll(err),
 		}
 	}
 
