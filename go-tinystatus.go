@@ -26,13 +26,14 @@ func main() {
 
 		daemonize = false
 		addr      = ":8080"
-		interval  = 10 * time.Second
+		interval  = 15 * time.Second
 	)
 	flaggy.DefaultParser.DisableShowVersionWithVersion()
 
 	flaggy.AddPositionalValue(&checkPath, checkPath, 1, false, "File containing all checks, formatted in CSV")
 	flaggy.AddPositionalValue(&incidentsPath, incidentsPath, 2, false, "File containing all incidents to be displayed")
 
+	flaggy.Duration(&timeout, "", "timeout", "Maximum time to wait a probe before aborting.")
 	flaggy.Bool(&daemonize, "", "daemon", "Start go-tinystatus as daemon with an embedded web server.")
 	flaggy.String(&addr, "", "addr", "Address on which the daemon will be listening.")
 	flaggy.Duration(&interval, "", "interval", "Interval between two page rendering.")
