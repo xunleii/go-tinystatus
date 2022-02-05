@@ -40,6 +40,14 @@ func (l StatusList) Categories() map[string][]Status {
 	for _, status := range l {
 		categories[status.Category] = append(categories[status.Category], status)
 	}
+
+	// NOTE: to keep retro-compatibility with tinystatus, if there is only 1 category
+	//  	 named `Uncategorized`, it should be renamed `Services`.
+	if len(categories) == 1 && categories["Uncategorized"] != nil {
+		categories["Services"] = categories["Uncategorized"]
+		delete(categories, "Uncategorized")
+	}
+
 	return categories
 }
 

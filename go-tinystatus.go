@@ -70,10 +70,10 @@ func main() {
 
 			rs := RecordStatus{
 				CType:    ctype,
-				Category: "Services", Name: strings.TrimSpace(record[2]),
+				Category: "Uncategorized", Name: strings.TrimSpace(record[2]),
 				Target: strings.TrimSpace(record[3]), Expectation: strings.TrimSpace(record[1]),
 			}
-			if len(record) >= 5 {
+			if len(record) >= 5 && strings.TrimSpace(record[4]) != "" {
 				rs.Category = strings.TrimSpace(record[4])
 			}
 
