@@ -16,7 +16,7 @@ import (
 )
 
 // Probe is used to scan a specific target and return its current status.
-type Probe func(record *RecordStatus) Status
+type Probe func(ctx context.Context, record *RecordStatus) Status
 
 // Probes represents all probes defined into go-tinystatus
 var Probes = map[string]Probe{
@@ -40,10 +40,33 @@ var Probes = map[string]Probe{
 var (
 	timeout      = 10 * time.Second
 	rxPortTarget = regexp.MustCompile(`(?P<host>[^\s]+)\s+(?P<port>\d+)`)
+
+	ipv4Transport = &http.Transport{
+		Proxy:                 http.DefaultTransport.(*http.Transport).Proxy,
+		DialContext:           http.DefaultTransport.(*http.Transport).DialContext,
+		ForceAttemptHTTP2:     http.DefaultTransport.(*http.Transport).ForceAttemptHTTP2,
+		MaxIdleConns:          http.DefaultTransport.(*http.Transport).MaxIdleConns,
+		IdleConnTimeout:       http.DefaultTransport.(*http.Transport).IdleConnTimeout,
+		TLSHandshakeTimeout:   http.DefaultTransport.(*http.Transport).TLSHandshakeTimeout,
+		ExpectContinueTimeout: http.DefaultTransport.(*http.Transport).ExpectContinueTimeout,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true}, // NOTE: disable TLS verification
+	}
+	ipv6Transport = &http.Transport{
+		Proxy:                 http.DefaultTransport.(*http.Transport).Proxy,
+		ForceAttemptHTTP2:     http.DefaultTransport.(*http.Transport).ForceAttemptHTTP2,
+		MaxIdleConns:          http.DefaultTransport.(*http.Transport).MaxIdleConns,
+		IdleConnTimeout:       http.DefaultTransport.(*http.Transport).IdleConnTimeout,
+		TLSHandshakeTimeout:   http.DefaultTransport.(*http.Transport).TLSHandshakeTimeout,
+		ExpectContinueTimeout: http.DefaultTransport.(*http.Transport).ExpectContinueTimeout,
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return http.DefaultTransport.(*http.Transport).DialContext(ctx, "tcp6", addr)
+		},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // NOTE: disable TLS verification
+	}
 )
 
 // httpProbe implements the scan probe for all `HTTP` records.
-func httpProbe(record *RecordStatus) Status {
+func httpProbe(ctx context.Context, record *RecordStatus) Status {
 	if !strings.HasPrefix(record.Target, "http") {
 		// NOTE: force to use a protocol scheme
 		record.Target = "http://" + record.Target
@@ -57,32 +80,29 @@ func httpProbe(record *RecordStatus) Status {
 		}
 	}
 
-	client := &http.Client{
-		// NOTE: allow insecure HTTPS requests (not the goal of this scan)
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-				network := "tcp4"
-				if record.CType == "http6" {
-					network = "tcp6"
-				}
-
-				return (&net.Dialer{
-					Timeout:   timeout,
-					KeepAlive: timeout,
-				}).DialContext(ctx, network, addr)
-			},
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-		Timeout: timeout, // NOTE: avoid infinite timeout
+	client := &http.Client{Timeout: timeout}
+	client.Transport = ipv4Transport
+	if record.CType == "http6" {
+		client.Transport = ipv6Transport
 	}
 
-	resp, err := client.Get(record.Target)
+	req, err := http.NewRequest(http.MethodGet, record.Target, nil)
 	if err != nil {
 		return Status{
 			RecordStatus: record,
 			ProbeResult:  errUnwrapAll(err),
 		}
 	}
+
+	req.WithContext(ctx)
+	resp, err := client.Do(req)
+	if err != nil {
+		return Status{
+			RecordStatus: record,
+			ProbeResult:  errUnwrapAll(err),
+		}
+	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != expectedCode {
 		return Status{
@@ -95,7 +115,7 @@ func httpProbe(record *RecordStatus) Status {
 }
 
 // pingProbe implements the scan for all `PING` records.
-func pingProbe(record *RecordStatus) Status {
+func pingProbe(_ context.Context, record *RecordStatus) Status {
 	if record.CType == "ping6" {
 		return Status{
 			RecordStatus: record,
@@ -143,7 +163,7 @@ func pingProbe(record *RecordStatus) Status {
 }
 
 // portProbe implements the scan for all `PORT` or `TCP` records.
-func portProbe(record *RecordStatus) Status {
+func portProbe(ctx context.Context, record *RecordStatus) Status {
 	expectedReturn, err := strconv.Atoi(record.Expectation)
 	if err != nil {
 		return Status{

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -103,7 +104,8 @@ func main() {
 		_ = file.Close()
 	}
 
-	html, err := page.RenderHTML()
+	ctx := log.WithContext(context.Background())
+	html, err := page.RenderHTML(ctx)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to render the status page")
 	}
@@ -113,12 +115,13 @@ func main() {
 		return
 	}
 
+	ctx, done := context.WithCancel(ctx)
 	rwx, ticker := sync.RWMutex{}, time.NewTicker(interval)
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
-				page, err := page.RenderHTML()
+				page, err := page.RenderHTML(ctx)
 				if err != nil {
 					log.Error().Err(err).Msg("failed to render the status page")
 				}
@@ -136,6 +139,8 @@ func main() {
 		defer rwx.RUnlock()
 		_, _ = wr.Write([]byte(html))
 	}))
+	done() // NOTE: cancel the current context to clean current connections
+
 	if err != nil {
 		log.Fatal().Err(err).Send()
 	}
@@ -151,7 +156,7 @@ type StatusPage struct {
 }
 
 // RenderHTML runs all checks in parallel and generate the HTML page.
-func (p StatusPage) RenderHTML() (string, error) {
+func (p StatusPage) RenderHTML(ctx context.Context) (string, error) {
 	p.start = time.Now()
 	p.status = StatusList{}
 
@@ -164,7 +169,7 @@ func (p StatusPage) RenderHTML() (string, error) {
 		go func(record RecordStatus) {
 			defer wg.Done()
 			defer func() { <-ratelimit }()
-			result := Probes[record.CType](&record)
+			result := Probes[record.CType](ctx, &record)
 
 			mx.Lock()
 			p.status = append(p.status, result)
