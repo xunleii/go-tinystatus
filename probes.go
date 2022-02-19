@@ -19,9 +19,9 @@ import (
 // Probe is used to scan a specific target and return its current status.
 type Probe func(ctx context.Context, record *RecordStatus) Status
 
+//nolint:gochecknoglobals
 // Probes represents all probes defined into go-tinystatus
 var Probes = map[string]Probe{
-	// tinystatus probes
 	"http6": httpProbe,
 	"http4": httpProbe,
 	"http":  httpProbe,
@@ -32,12 +32,12 @@ var Probes = map[string]Probe{
 	"port4": portProbe,
 	"port":  portProbe,
 
-	// go-tinystatus probes
 	"tcp6": portProbe,
 	"tcp4": portProbe,
 	"tcp":  portProbe,
 }
 
+//nolint:forcetypeassert,gochecknoglobals,gosec
 var (
 	timeout      = 10 * time.Second
 	rxPortTarget = regexp.MustCompile(`(?P<host>[^\s]+)\s+(?P<port>\d+)`)
@@ -50,7 +50,7 @@ var (
 		IdleConnTimeout:       http.DefaultTransport.(*http.Transport).IdleConnTimeout,
 		TLSHandshakeTimeout:   http.DefaultTransport.(*http.Transport).TLSHandshakeTimeout,
 		ExpectContinueTimeout: http.DefaultTransport.(*http.Transport).ExpectContinueTimeout,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true}, // NOTE: disable TLS verification
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
 	}
 	ipv6Transport = &http.Transport{
 		Proxy:                 http.DefaultTransport.(*http.Transport).Proxy,
@@ -62,7 +62,7 @@ var (
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			return http.DefaultTransport.(*http.Transport).DialContext(ctx, "tcp6", addr)
 		},
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // NOTE: disable TLS verification
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 )
 
@@ -95,7 +95,7 @@ func httpProbe(ctx context.Context, record *RecordStatus) Status {
 		return status
 	}
 
-	req.WithContext(ctx)
+	req = req.WithContext(ctx)
 	log.Trace().Msg("request sent")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -103,7 +103,7 @@ func httpProbe(ctx context.Context, record *RecordStatus) Status {
 		log.Error().Err(status.ProbeResult).Send()
 		return status
 	}
-	defer resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != expectedCode {
 		status.ProbeResult = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -184,7 +184,7 @@ func portProbe(ctx context.Context, record *RecordStatus) Status {
 	log.Trace().Msg("port scan sent")
 	network := strings.ReplaceAll(record.CType, "port", "tcp") // NOTE: convert portX in tcpX
 	conn, err := net.DialTimeout(network, addr, timeout)
-	if err != nil && (shouldBeOpen || !err.(net.Error).Timeout()) {
+	if err != nil && (shouldBeOpen || !err.(net.Error).Timeout()) { //nolint // net.DialTimeout only returns net.Error
 		status.ProbeResult = errUnwrapAll(err)
 		log.Error().Err(status.ProbeResult).Send()
 		return status
@@ -205,8 +205,7 @@ func portProbe(ctx context.Context, record *RecordStatus) Status {
 // This is useful to avoid too much information to display on the status
 // page.
 func errUnwrapAll(werr error) error {
-	err := errors.Unwrap(werr)
-	if err != nil {
+	if err := errors.Unwrap(werr); err != nil {
 		return errUnwrapAll(err)
 	}
 	return werr

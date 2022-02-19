@@ -53,7 +53,7 @@ func main() {
 		Logger()
 	page.ctx = logger.WithContext(context.Background())
 
-	html, err := page.RenderHTML(page.ctx)
+	html, err := page.RenderHTML()
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to render the status page")
 	}
@@ -63,21 +63,18 @@ func main() {
 		return
 	}
 
-	ctx, done := context.WithCancel(page.ctx)
+	_, done := context.WithCancel(page.ctx)
 	rwx, ticker := sync.RWMutex{}, time.NewTicker(interval)
 	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				page, err := page.RenderHTML(ctx)
-				if err != nil {
-					logger.Error().Err(err).Msg("failed to render the status page")
-				}
-
-				rwx.Lock()
-				html = page
-				rwx.Unlock()
+		for range ticker.C {
+			newHTML, rendErr := page.RenderHTML()
+			if rendErr != nil {
+				logger.Error().Err(rendErr).Msg("failed to render the status page")
 			}
+
+			rwx.Lock()
+			html = newHTML
+			rwx.Unlock()
 		}
 	}()
 
@@ -108,7 +105,7 @@ type StatusPage struct {
 }
 
 // RenderHTML runs all checks in parallel and generate the HTML page.
-func (p StatusPage) RenderHTML(ctx context.Context) (string, error) {
+func (p StatusPage) RenderHTML() (string, error) {
 	p.start = time.Now()
 
 	buff := bytes.NewBufferString("")
@@ -116,12 +113,16 @@ func (p StatusPage) RenderHTML(ctx context.Context) (string, error) {
 	return buff.String(), err
 }
 
-func (p StatusPage) LastCheck() time.Time   { return time.Now() }
+// LastCheck is used during HTML rendering to know when the page has
+// been generated.
+func (p StatusPage) LastCheck() time.Time { return time.Now() }
+
+// Elapsed returns how much time it took to make all checks.
 func (p StatusPage) Elapsed() time.Duration { return time.Since(p.start) }
 
 // Records reads the CSV file containing the list of checks, parses it and
 // returns the list of RecordStatus representing a check.
-func (p StatusPage) Records() ([]RecordStatus, error) {
+func (p *StatusPage) Records() ([]RecordStatus, error) {
 	logger := zerolog.Ctx(p.ctx).
 		With().Str("component", "StatusPage.Record").
 		Logger()
@@ -143,9 +144,9 @@ func (p StatusPage) Records() ([]RecordStatus, error) {
 
 	var records []RecordStatus
 
-	scanner, line, nline := bufio.NewScanner(file), "", 0
-	for scanner.Scan() {
-		line, nline = strings.TrimSpace(scanner.Text()), nline+1
+	scanner := bufio.NewScanner(file)
+	for nline := 0; scanner.Scan(); nline++ {
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			// NOTE: ignore empty or commented lines
 			continue
