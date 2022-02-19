@@ -20,6 +20,7 @@ func main() {
 	page := StatusPage{
 		CheckPath:     "checks.csv",
 		IncidentsPath: "incidents.txt",
+		PageTitle:     "tinystatus",
 	}
 
 	var (
@@ -33,6 +34,7 @@ func main() {
 	flaggy.AddPositionalValue(&page.CheckPath, page.CheckPath, 1, false, "File containing all checks, formatted in CSV")
 	flaggy.AddPositionalValue(&page.IncidentsPath, page.IncidentsPath, 2, false, "File containing all incidents to be displayed")
 
+	flaggy.String(&page.PageTitle, "", "title", "Title of the status page.")
 	flaggy.Duration(&timeout, "", "timeout", "Maximum time to wait a probe before aborting.")
 	flaggy.Bool(&daemonize, "", "daemon", "Start go-tinystatus as daemon with an embedded web server.")
 	flaggy.String(&addr, "", "addr", "Address on which the daemon will be listening.")
@@ -96,6 +98,7 @@ func main() {
 type StatusPage struct {
 	CheckPath     string
 	IncidentsPath string
+	PageTitle     string
 
 	records           []RecordStatus
 	lastRecordsUpdate time.Time

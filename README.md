@@ -18,6 +18,7 @@ wanted to remove all remaining dependencies.
 * `tinystatus` Tiny (~1kb) optimized result page
 * `tinystatus` Incident history (manual)
 * `go-tinystatus` Self-embedded web server
+* `go-tinystatus` Automatic update of checks and incidents
 
 ### Unavailable features
 

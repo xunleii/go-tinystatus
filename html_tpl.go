@@ -13,7 +13,7 @@ var templatedHtml = template.Must(template.New("tinystatus").Funcs(sprig.FuncMap
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <title>go-tinystatus</title>
+    <title>{{.PageTitle}}</title>
     <style>
       body { font-family: segoe ui, Roboto, Oxygen-Sans, Ubuntu, Cantarell, helvetica neue, Verdana, sans-serif; }
       h1 { margin-top: 30px; }
