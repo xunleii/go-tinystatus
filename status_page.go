@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/Masterminds/sprig"
 	"github.com/rs/zerolog"
 )
 
@@ -23,6 +25,9 @@ type StatusPage struct {
 	incidents           []string
 	lastIncidentsUpdate time.Time
 }
+
+//nolint:gochecknoglobals
+var templatedHTML = template.Must(template.New("tinystatus").Funcs(sprig.FuncMap()).Parse(rawHTML))
 
 // RenderHTML runs all configured checks in parallel, fetch all last incidents
 // and generates the HTML page.
@@ -49,7 +54,7 @@ func (p StatusPage) RenderHTML(ctx context.Context) (string, error) {
 	}
 
 	buff := bytes.NewBufferString("")
-	err = templatedHtml.ExecuteTemplate(buff, "tinystatus", data)
+	err = templatedHTML.ExecuteTemplate(buff, "tinystatus", data)
 	return buff.String(), err
 }
 

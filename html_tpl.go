@@ -1,13 +1,7 @@
 //nolint
 package main
 
-import (
-	"html/template"
-
-	"github.com/Masterminds/sprig"
-)
-
-var templatedHtml = template.Must(template.New("tinystatus").Funcs(sprig.FuncMap()).Parse(`
+var rawHTML = `
 {{- $statuses := .Statuses}}
 <!DOCTYPE html>
 <html lang="en">
@@ -70,4 +64,4 @@ var templatedHtml = template.Must(template.New("tinystatus").Funcs(sprig.FuncMap
     </div>
   </body>
 </html>
-`))
+`
