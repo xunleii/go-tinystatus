@@ -28,6 +28,7 @@ func main() {
 		daemonize = false
 		addr      = ":8080"
 		interval  = 15 * time.Second
+		logLevel  = zerolog.LevelInfoValue
 	)
 	flaggy.DefaultParser.DisableShowVersionWithVersion()
 
@@ -38,8 +39,15 @@ func main() {
 	flaggy.Bool(&daemonize, "", "daemon", "Start go-tinystatus as daemon with an embedded web server.")
 	flaggy.String(&addr, "", "addr", "Address on which the daemon will be listening.")
 	flaggy.Duration(&interval, "", "interval", "Interval between two page rendering.")
+	flaggy.String(&logLevel, "", "level", "Log verbosity.")
 
 	flaggy.Parse()
+
+	lvl, err := zerolog.ParseLevel(logLevel)
+	if err != nil {
+		lvl = zerolog.InfoLevel
+	}
+	log = log.Level(lvl)
 
 	var page StatusPage
 

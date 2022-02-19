@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-ping/ping"
+	"github.com/rs/zerolog"
 )
 
 // Probe is used to scan a specific target and return its current status.
@@ -71,13 +72,14 @@ func httpProbe(ctx context.Context, record *RecordStatus) Status {
 		// NOTE: force to use a protocol scheme
 		record.Target = "http://" + record.Target
 	}
+	log := zerolog.Ctx(ctx).With().Str("probe", record.CType).Str("target", record.Target).Logger()
+	status := Status{RecordStatus: record}
 
 	expectedCode, err := strconv.Atoi(record.Expectation)
 	if err != nil {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  fmt.Errorf("invalid expected status code '%s': should a number", record.Expectation),
-		}
+		status.ProbeResult = fmt.Errorf("invalid expected status code '%s': should a number", record.Expectation)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 
 	client := &http.Client{Timeout: timeout}
@@ -88,71 +90,68 @@ func httpProbe(ctx context.Context, record *RecordStatus) Status {
 
 	req, err := http.NewRequest(http.MethodGet, record.Target, nil)
 	if err != nil {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  errUnwrapAll(err),
-		}
+		status.ProbeResult = errUnwrapAll(err)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 
 	req.WithContext(ctx)
+	log.Trace().Msg("request sent")
 	resp, err := client.Do(req)
 	if err != nil {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  errUnwrapAll(err),
-		}
+		status.ProbeResult = errUnwrapAll(err)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != expectedCode {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  fmt.Errorf("status code: %d", resp.StatusCode),
-		}
+		status.ProbeResult = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 
 	return Status{RecordStatus: record}
 }
 
 // pingProbe implements the scan for all `PING` records.
-func pingProbe(_ context.Context, record *RecordStatus) Status {
+func pingProbe(ctx context.Context, record *RecordStatus) Status {
 	if record.CType == "ping6" {
 		return Status{
 			RecordStatus: record,
 			ProbeResult:  fmt.Errorf("`ping6` is not supported by go-tinystatus"),
 		}
 	}
+	log := zerolog.Ctx(ctx).With().Str("probe", record.CType).Str("target", record.Target).Logger()
+	status := Status{RecordStatus: record}
 
 	expectedReturn, err := strconv.Atoi(record.Expectation)
 	if err != nil {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  fmt.Errorf("invalid expected return code '%s': should a number", record.Expectation),
-		}
+		status.ProbeResult = fmt.Errorf("invalid expected return code '%s': should a number", record.Expectation)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 	shouldBePingable := expectedReturn == 0
 
 	pinger, err := ping.NewPinger(record.Target)
 	if err != nil {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  err,
-		}
+		status.ProbeResult = err
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 	pinger.Timeout = timeout
 	pinger.Count = 1
 
+	log.Trace().Msg("ping sent")
 	err = pinger.Run()
 	if shouldBePingable && err != nil {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  errUnwrapAll(err),
-		}
+		status.ProbeResult = errUnwrapAll(err)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 
 	pcktReceived := pinger.Statistics().PacketsRecv
 
-	status := Status{RecordStatus: record}
 	switch {
 	case shouldBePingable && pcktReceived == 0:
 		status.ProbeResult = fmt.Errorf("no packet received")
@@ -164,33 +163,33 @@ func pingProbe(_ context.Context, record *RecordStatus) Status {
 
 // portProbe implements the scan for all `PORT` or `TCP` records.
 func portProbe(ctx context.Context, record *RecordStatus) Status {
+	log := zerolog.Ctx(ctx).With().Str("probe", record.CType).Str("target", record.Target).Logger()
+	status := Status{RecordStatus: record}
+
 	expectedReturn, err := strconv.Atoi(record.Expectation)
 	if err != nil {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  fmt.Errorf("invalid expected return code '%s': should a number", record.Expectation),
-		}
+		status.ProbeResult = fmt.Errorf("invalid expected return code '%s': should a number", record.Expectation)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 	shouldBeOpen := expectedReturn == 0
 
 	addr := rxPortTarget.ReplaceAllString(record.Target, "$host:$port")
 	if addr == record.Target {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  fmt.Errorf("invalid target '%s': should be formated like '<host> <port>'", record.Target),
-		}
+		status.ProbeResult = fmt.Errorf("invalid target '%s': should be formated like '<host> <port>'", record.Target)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 
+	log.Trace().Msg("port scan sent")
 	network := strings.ReplaceAll(record.CType, "port", "tcp") // NOTE: convert portX in tcpX
 	conn, err := net.DialTimeout(network, addr, timeout)
 	if err != nil && (shouldBeOpen || !err.(net.Error).Timeout()) {
-		return Status{
-			RecordStatus: record,
-			ProbeResult:  errUnwrapAll(err),
-		}
+		status.ProbeResult = errUnwrapAll(err)
+		log.Error().Err(status.ProbeResult).Send()
+		return status
 	}
 
-	status := Status{RecordStatus: record}
 	switch {
 	case shouldBeOpen && conn == nil:
 		host, port, _ := net.SplitHostPort(addr)
