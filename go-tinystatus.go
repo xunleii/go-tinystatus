@@ -17,10 +17,12 @@ import (
 )
 
 func main() {
-	var (
-		checkPath     = "checks.csv"
-		incidentsPath = "incidents.txt"
+	page := StatusPage{
+		CheckPath:     "checks.csv",
+		IncidentsPath: "incidents.txt",
+	}
 
+	var (
 		daemonize = false
 		addr      = ":8080"
 		interval  = 15 * time.Second
@@ -28,8 +30,8 @@ func main() {
 	)
 	flaggy.DefaultParser.DisableShowVersionWithVersion()
 
-	flaggy.AddPositionalValue(&checkPath, checkPath, 1, false, "File containing all checks, formatted in CSV")
-	flaggy.AddPositionalValue(&incidentsPath, incidentsPath, 2, false, "File containing all incidents to be displayed")
+	flaggy.AddPositionalValue(&page.CheckPath, page.CheckPath, 1, false, "File containing all checks, formatted in CSV")
+	flaggy.AddPositionalValue(&page.IncidentsPath, page.IncidentsPath, 2, false, "File containing all incidents to be displayed")
 
 	flaggy.Duration(&timeout, "", "timeout", "Maximum time to wait a probe before aborting.")
 	flaggy.Bool(&daemonize, "", "daemon", "Start go-tinystatus as daemon with an embedded web server.")
@@ -47,52 +49,7 @@ func main() {
 		Level(lvl).
 		With().Timestamp().
 		Logger()
-
-	var page StatusPage = StatusPage{ctx: logger.WithContext(context.Background())}
-	{
-		file, err := os.Open(checkPath)
-		if err != nil {
-			logger.Fatal().Err(err).Send()
-		}
-
-		scanner, line, nline := bufio.NewScanner(file), "", 0
-		for scanner.Scan() {
-			line, nline = strings.TrimSpace(scanner.Text()), nline+1
-			if line == "" || strings.HasPrefix(line, "#") {
-				// NOTE: ignore empty or commented lines
-				continue
-			}
-
-			record := strings.Split(line, ",")
-			if len(record) < 4 {
-				logger.Error().Msgf("invalid CSV row %d: wrong number of fields", nline)
-				continue
-			}
-
-			ctype := strings.ToLower(strings.TrimSpace(record[0]))
-			if _, exists := Probes[ctype]; !exists {
-				logger.Warn().Msgf("unknown probe '%s'", ctype)
-				continue
-			}
-
-			rs := RecordStatus{
-				CType:    ctype,
-				Category: "Uncategorized", Name: strings.TrimSpace(record[2]),
-				Target: strings.TrimSpace(record[3]), Expectation: strings.TrimSpace(record[1]),
-			}
-			if len(record) >= 5 && strings.TrimSpace(record[4]) != "" {
-				rs.Category = strings.TrimSpace(record[4])
-			}
-
-			page.Records = append(page.Records, rs)
-		}
-
-		if err := scanner.Err(); err != nil {
-			logger.Fatal().Err(err).Msgf("failed to extract CSV rows from '%s'", checkPath)
-		}
-		_ = file.Close()
-	}
-	page.IncidentsPath = incidentsPath
+	page.ctx = logger.WithContext(context.Background())
 
 	html, err := page.RenderHTML(page.ctx)
 	if err != nil {
@@ -137,47 +94,135 @@ func main() {
 
 // StatusPage contains all data required to generate the status page.
 type StatusPage struct {
-	Records       []RecordStatus
+	CheckPath     string
 	IncidentsPath string
 
-	start  time.Time
-	status StatusList
-	ctx    context.Context
+	records           []RecordStatus
+	lastRecordsUpdate time.Time
+
+	start time.Time
+	ctx   context.Context
 }
 
 // RenderHTML runs all checks in parallel and generate the HTML page.
 func (p StatusPage) RenderHTML(ctx context.Context) (string, error) {
 	p.start = time.Now()
-	p.status = StatusList{}
-
-	// NOTE: limit the number of check to 32 requests in parallel
-	ratelimit, wg, mx := make(chan struct{}, 32), sync.WaitGroup{}, sync.Mutex{}
-	for _, record := range p.Records {
-		wg.Add(1)
-		ratelimit <- struct{}{}
-
-		go func(record RecordStatus) {
-			defer wg.Done()
-			defer func() { <-ratelimit }()
-			result := Probes[record.CType](ctx, &record)
-
-			mx.Lock()
-			p.status = append(p.status, result)
-			mx.Unlock()
-		}(record)
-	}
-	wg.Wait()
 
 	buff := bytes.NewBufferString("")
 	err := templatedHtml.ExecuteTemplate(buff, "tinystatus", p)
 	return buff.String(), err
 }
 
-func (p StatusPage) Status() StatusList     { return p.status }
 func (p StatusPage) LastCheck() time.Time   { return time.Now() }
 func (p StatusPage) Elapsed() time.Duration { return time.Since(p.start) }
+
+// Records reads the CSV file containing the list of checks, parses it and
+// returns the list of RecordStatus representing a check.
+func (p StatusPage) Records() ([]RecordStatus, error) {
+	logger := zerolog.Ctx(p.ctx).
+		With().Str("component", "StatusPage.Record").
+		Logger()
+
+	stats, err := os.Stat(p.CheckPath)
+	if err != nil {
+		return p.records, err
+	}
+
+	if !stats.ModTime().After(p.lastRecordsUpdate) {
+		logger.Debug().Msgf("'%s' not modified since last check", p.CheckPath)
+		return p.records, nil
+	}
+
+	file, err := os.Open(p.CheckPath)
+	if err != nil {
+		return p.records, err
+	}
+
+	var records []RecordStatus
+
+	scanner, line, nline := bufio.NewScanner(file), "", 0
+	for scanner.Scan() {
+		line, nline = strings.TrimSpace(scanner.Text()), nline+1
+		if line == "" || strings.HasPrefix(line, "#") {
+			// NOTE: ignore empty or commented lines
+			continue
+		}
+
+		record := strings.Split(line, ",")
+		if len(record) < 4 {
+			logger.Error().Msgf("invalid CSV row %d: wrong number of fields", nline)
+			continue
+		}
+
+		ctype := strings.ToLower(strings.TrimSpace(record[0]))
+		if _, exists := Probes[ctype]; !exists {
+			logger.Warn().Msgf("unknown probe '%s'", ctype)
+			continue
+		}
+
+		rs := RecordStatus{
+			CType:    ctype,
+			Category: "Uncategorized", Name: strings.TrimSpace(record[2]),
+			Target: strings.TrimSpace(record[3]), Expectation: strings.TrimSpace(record[1]),
+		}
+		if len(record) >= 5 && strings.TrimSpace(record[4]) != "" {
+			rs.Category = strings.TrimSpace(record[4])
+		}
+
+		records = append(records, rs)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return p.records, fmt.Errorf("failed to extract CSV rows from '%s': %w", p.CheckPath, err)
+	}
+	_ = file.Close()
+
+	p.lastRecordsUpdate = stats.ModTime()
+	p.records = records
+	return p.records, nil
+}
+
+// Status runs all checks in parallel and returns the list of results.
+func (p StatusPage) Status() StatusList {
+	logger := zerolog.Ctx(p.ctx).
+		With().Str("component", "StatusPage.Status").
+		Logger()
+
+	records, err := p.Records()
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to get the list of checks")
+		// NOTE: we don't return an error here because we want to continue
+		// 		 with old records
+	}
+
+	// NOTE: limit the number of check to 32 requests in parallel
+	ratelimit, wg, mx := make(chan struct{}, 32), sync.WaitGroup{}, sync.Mutex{}
+	status := StatusList{}
+	for _, record := range records {
+		wg.Add(1)
+		ratelimit <- struct{}{}
+
+		go func(record RecordStatus) {
+			defer wg.Done()
+			defer func() { <-ratelimit }()
+			result := Probes[record.CType](p.ctx, &record)
+
+			mx.Lock()
+			status = append(status, result)
+			mx.Unlock()
+		}(record)
+	}
+	wg.Wait()
+
+	return status
+}
+
+// Incidents reads the CSV file containing the list of incidents and returns
+// the list of incidents.
 func (p StatusPage) Incidents() []string {
-	logger := zerolog.Ctx(p.ctx)
+	logger := zerolog.Ctx(p.ctx).
+		With().Str("component", "StatusPage.Incidents").
+		Logger()
 
 	var incidents []string
 	if _, err := os.Stat(p.IncidentsPath); !errors.Is(err, os.ErrNotExist) {

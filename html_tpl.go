@@ -7,12 +7,13 @@ import (
 )
 
 var templatedHtml = template.Must(template.New("tinystatus").Funcs(sprig.FuncMap()).Parse(`
+{{- $statuses := .Status}}
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <title>tinystatus</title>
+    <title>go-tinystatus</title>
     <style>
       body { font-family: segoe ui, Roboto, Oxygen-Sans, Ubuntu, Cantarell, helvetica neue, Verdana, sans-serif; }
       h1 { margin-top: 30px; }
@@ -33,13 +34,13 @@ var templatedHtml = template.Must(template.New("tinystatus").Funcs(sprig.FuncMap
     <div class='container'>
       <h1>Global Status</h1>
       <ul>
-		{{- if gt .Status.NumberOutages 0}}
-        <ul><li class='panel failed-bg'>{{.Status.NumberOutages}} Outage(s)</li></ul>
+		{{- if gt $statuses.NumberOutages 0}}
+        <ul><li class='panel failed-bg'>{{$statuses.NumberOutages}} Outage(s)</li></ul>
 		{{- else}}
         <li class='panel success-bg'>All Systems Operational</li>
 		{{- end}}
       </ul>
-	  {{- range $category, $status := .Status.Categories}}
+	  {{- range $category, $status := $statuses.Categories}}
       <h1>{{$category}}</h1>
       <ul>
 		{{- range $status}}
