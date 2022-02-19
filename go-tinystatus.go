@@ -16,10 +16,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-var log = zerolog.New(os.Stderr).
-	With().Timestamp().
-	Logger()
-
 func main() {
 	var (
 		checkPath     = "checks.csv"
@@ -47,14 +43,16 @@ func main() {
 	if err != nil {
 		lvl = zerolog.InfoLevel
 	}
-	log = log.Level(lvl)
+	logger := zerolog.New(os.Stderr).
+		Level(lvl).
+		With().Timestamp().
+		Logger()
 
-	var page StatusPage
-
+	var page StatusPage = StatusPage{ctx: logger.WithContext(context.Background())}
 	{
 		file, err := os.Open(checkPath)
 		if err != nil {
-			log.Fatal().Err(err).Send()
+			logger.Fatal().Err(err).Send()
 		}
 
 		scanner, line, nline := bufio.NewScanner(file), "", 0
@@ -67,13 +65,13 @@ func main() {
 
 			record := strings.Split(line, ",")
 			if len(record) < 4 {
-				log.Error().Msgf("invalid CSV row %d: wrong number of fields", nline)
+				logger.Error().Msgf("invalid CSV row %d: wrong number of fields", nline)
 				continue
 			}
 
 			ctype := strings.ToLower(strings.TrimSpace(record[0]))
 			if _, exists := Probes[ctype]; !exists {
-				log.Warn().Msgf("unknown probe '%s'", ctype)
+				logger.Warn().Msgf("unknown probe '%s'", ctype)
 				continue
 			}
 
@@ -90,32 +88,15 @@ func main() {
 		}
 
 		if err := scanner.Err(); err != nil {
-			log.Fatal().Err(err).Msgf("failed to extract CSV rows from '%s'", checkPath)
+			logger.Fatal().Err(err).Msgf("failed to extract CSV rows from '%s'", checkPath)
 		}
 		_ = file.Close()
 	}
+	page.IncidentsPath = incidentsPath
 
-	if _, err := os.Stat(incidentsPath); !errors.Is(err, os.ErrNotExist) {
-		file, err := os.Open(incidentsPath)
-		if err != nil {
-			log.Fatal().Err(err).Send()
-		}
-
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			page.Incidents = append(page.Incidents, strings.TrimSpace(scanner.Text()))
-		}
-
-		if err := scanner.Err(); err != nil {
-			log.Fatal().Err(err).Msgf("failed to extract incidents from '%s'", checkPath)
-		}
-		_ = file.Close()
-	}
-
-	ctx := log.WithContext(context.Background())
-	html, err := page.RenderHTML(ctx)
+	html, err := page.RenderHTML(page.ctx)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to render the status page")
+		logger.Fatal().Err(err).Msg("failed to render the status page")
 	}
 
 	if !daemonize {
@@ -123,7 +104,7 @@ func main() {
 		return
 	}
 
-	ctx, done := context.WithCancel(ctx)
+	ctx, done := context.WithCancel(page.ctx)
 	rwx, ticker := sync.RWMutex{}, time.NewTicker(interval)
 	go func() {
 		for {
@@ -131,7 +112,7 @@ func main() {
 			case <-ticker.C:
 				page, err := page.RenderHTML(ctx)
 				if err != nil {
-					log.Error().Err(err).Msg("failed to render the status page")
+					logger.Error().Err(err).Msg("failed to render the status page")
 				}
 
 				rwx.Lock()
@@ -141,7 +122,7 @@ func main() {
 		}
 	}()
 
-	log.Info().Msgf("start go-tinystatus listening on '%s'", addr)
+	logger.Info().Msgf("start go-tinystatus listening on '%s'", addr)
 	err = http.ListenAndServe(addr, http.HandlerFunc(func(wr http.ResponseWriter, _ *http.Request) {
 		rwx.RLock()
 		defer rwx.RUnlock()
@@ -150,17 +131,18 @@ func main() {
 	done() // NOTE: cancel the current context to clean current connections
 
 	if err != nil {
-		log.Fatal().Err(err).Send()
+		logger.Fatal().Err(err).Send()
 	}
 }
 
 // StatusPage contains all data required to generate the status page.
 type StatusPage struct {
-	Records   []RecordStatus
-	Incidents []string
+	Records       []RecordStatus
+	IncidentsPath string
 
 	start  time.Time
 	status StatusList
+	ctx    context.Context
 }
 
 // RenderHTML runs all checks in parallel and generate the HTML page.
@@ -194,3 +176,27 @@ func (p StatusPage) RenderHTML(ctx context.Context) (string, error) {
 func (p StatusPage) Status() StatusList     { return p.status }
 func (p StatusPage) LastCheck() time.Time   { return time.Now() }
 func (p StatusPage) Elapsed() time.Duration { return time.Since(p.start) }
+func (p StatusPage) Incidents() []string {
+	logger := zerolog.Ctx(p.ctx)
+
+	var incidents []string
+	if _, err := os.Stat(p.IncidentsPath); !errors.Is(err, os.ErrNotExist) {
+		file, err := os.Open(p.IncidentsPath)
+		if err != nil {
+			logger.Error().Err(err).Send()
+			return nil
+		}
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			incidents = append(incidents, strings.TrimSpace(scanner.Text()))
+		}
+
+		if err := scanner.Err(); err != nil {
+			logger.Error().Err(err).Msgf("failed to extract incidents from '%s'", p.IncidentsPath)
+			return nil
+		}
+		_ = file.Close()
+	}
+	return incidents
+}
