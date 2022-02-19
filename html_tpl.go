@@ -1,8 +1,12 @@
 package main
 
-import "html/template"
+import (
+	"html/template"
 
-var templatedHtml = template.Must(template.New("tinystatus").Parse(`
+	"github.com/Masterminds/sprig"
+)
+
+var templatedHtml = template.Must(template.New("tinystatus").Funcs(sprig.FuncMap()).Parse(`
 <!DOCTYPE html>
 <html lang="en">
   <head>
@@ -14,6 +18,7 @@ var templatedHtml = template.Must(template.New("tinystatus").Parse(`
       h1 { margin-top: 30px; }
       ul { padding: 0px; }
       li { list-style: none; margin-bottom: 2px; padding: 5px; border-bottom: 1px solid #ddd; }
+	  a { text-decoration: none; color: #000; }
       .container { max-width: 600px; width: 100%; margin: 15px auto; }
       .panel { text-align: center; padding: 10px; border: 0px; border-radius: 5px; }
       .failed-bg { color: white; background-color: #E25D6A; }
@@ -44,7 +49,11 @@ var templatedHtml = template.Must(template.New("tinystatus").Parse(`
 		{{- end}}
 		{{- range $status}}
 		  {{- if .Succeed}}
+			{{- if (.CType | regexMatch "http[46]?") }}
+        <li><a href="{{.Target}}">{{.Name}}</a> <span class='status success'>Operational</span></li>
+			{{- else}}
         <li>{{.Name}} <span class='status success'>Operational</span></li>
+			{{- end}}
 		  {{- end}}
 		{{- end}}
       </ul>
