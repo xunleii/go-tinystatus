@@ -8,13 +8,13 @@ import (
 )
 
 var templatedHtml = template.Must(template.New("tinystatus").Funcs(sprig.FuncMap()).Parse(`
-{{- $statuses := .Status}}
+{{- $statuses := .Statuses}}
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <title>{{.PageTitle}}</title>
+    <title>go-tinystatus</title>
     <style>
       body { font-family: segoe ui, Roboto, Oxygen-Sans, Ubuntu, Cantarell, helvetica neue, Verdana, sans-serif; }
       h1 { margin-top: 30px; }
